@@ -1,0 +1,74 @@
+#!/usr/bin/python3 -I
+"""Hardened stand-in for macOS `sandbox-exec`, placed first on the DSH service's PATH by scripts/dsh-superagent.
+
+DSH's Seatbelt backend (`@deepseek-ai/dsh-sandbox-local`) confines only file *writes*. This wrapper keeps DSH's profile and
+appends rules so a confined command (every worker shell command under `workspace-write`) also:
+
+- reads nothing under the operator's home directory except the paths it needs: the workspace roots DSH granted for writing,
+  the worker command shims and git configuration in the state directory, and `~/.local` (installed CLIs);
+- cannot reach the keychain service, so CLIs cannot fetch stored tokens;
+- cannot connect to the orchestrator's local management port, so a worker cannot act as the panel;
+- cannot connect to Unix-domain sockets (an SSH agent, other local daemons).
+
+Seatbelt applies the last matching rule, so the appended rules override DSH's `(allow default)` and our own allow rules come
+after our deny rules. Child processes inherit the profile, including ones that leave the process group with setsid.
+
+Environment (set by the service script; defaults in brackets):
+  SUPERAGENT_STATE_DIR   the plugin's stateDir [~/.dsh/state/superagent]
+  SUPERAGENT_ADMIN_PORT  the DSH web server port [3082]
+  SUPERAGENT_READ_ALLOW  extra absolute paths under home that commands may read, separated by ':' []
+  SUPERAGENT_SANDBOX_LOG file to append one line per confined command (time, rule count, program) []
+"""
+import os
+import re
+import sys
+
+REAL = '/usr/bin/sandbox-exec'
+
+
+def sbpl(path: str) -> str:
+    return '"' + path.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def extra_rules(profile: str, env: dict) -> str:
+    home = os.path.realpath(env.get('HOME') or os.path.expanduser('~'))
+    state = os.path.realpath(env.get('SUPERAGENT_STATE_DIR') or os.path.join(home, '.dsh/state/superagent'))
+    port = env.get('SUPERAGENT_ADMIN_PORT') or '3082'
+    if not port.isdigit():
+        raise SystemExit('sandbox-exec (hardened): SUPERAGENT_ADMIN_PORT must be a number')
+    # Workspace roots DSH granted for writing: `(allow file-write* (subpath "X") ...)`.
+    writable = re.findall(r'\(subpath "((?:[^"\\]|\\.)*)"\)', profile)
+    writable = [w.replace('\\"', '"').replace('\\\\', '\\') for w in writable]
+    readable = [p for p in writable if p == home or p.startswith(home + '/')]
+    readable += [os.path.join(state, 'worker-bin'), os.path.join(home, '.local')]
+    readable += [p for p in (env.get('SUPERAGENT_READ_ALLOW') or '').split(':') if p.startswith('/')]
+    rules = [
+        f'(deny file-read* (subpath {sbpl(home)}))',
+        f'(allow file-read-metadata (literal {sbpl(home)}))',
+        f'(allow file-read* (literal {sbpl(os.path.join(state, "worker-gitconfig"))}))',
+    ]
+    rules += [f'(allow file-read* (subpath {sbpl(os.path.realpath(p))}))' for p in readable]
+    rules += [
+        '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd.xpc")'
+        ' (global-name "com.apple.security.agent") (global-name "com.apple.secd"))',
+        f'(deny network-outbound (remote ip "localhost:{port}"))',
+        '(deny network-outbound (remote unix-socket))',
+    ]
+    return ' '.join(rules)
+
+
+def main(argv: list) -> None:
+    args = argv[1:]
+    if len(args) >= 2 and args[0] == '-p':
+        args = ['-p', args[1] + ' ' + extra_rules(args[1], dict(os.environ))] + args[2:]
+        log = os.environ.get('SUPERAGENT_SANDBOX_LOG')
+        if log:
+            # One line per confined command: when, the hardened rule count, and the program, never its arguments.
+            command = args[args.index('--') + 1] if '--' in args else '?'
+            with open(log, 'a') as out:
+                out.write(f"{__import__('time').strftime('%F %T')} rules={args[1].count('(deny ')} {os.path.basename(command)}\n")
+    os.execv(REAL, [REAL] + args)
+
+
+if __name__ == '__main__':
+    main(sys.argv)

@@ -27,6 +27,26 @@ CONTROL = ARTIFACTS / 'control'
 KEEP_LOGS = 20
 
 
+# Variables the service inherits; everything else in the operator's environment is dropped, so a secret in an unrelated
+# variable cannot reach a worker whatever its name. DSH reads model credentials from its own store and $DSH_HOME/.env.
+SERVICE_ENV = ('HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'TMPDIR', 'DSH_HOME',
+               'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy',
+               'SUPERAGENT_STATE_DIR', 'SUPERAGENT_ADMIN_PORT', 'SUPERAGENT_READ_ALLOW', 'SUPERAGENT_SANDBOX_LOG')
+HARDENED = ROOT / 'scripts' / 'hardened'
+
+
+def service_env():
+    """`env -i` argv for the service: the allowlisted variables, NO_PROXY covering loopback, and PATH with the hardened
+    sandbox-exec first. With DSH_SUPERAGENT_UNHARDENED=1 the operator's environment passes through unchanged."""
+    if os.environ.get('DSH_SUPERAGENT_UNHARDENED') == '1':
+        return []
+    keep = {name: os.environ[name] for name in SERVICE_ENV if name in os.environ}
+    loopback = [entry for entry in (os.environ.get('NO_PROXY') or '').split(',') if entry]
+    keep['NO_PROXY'] = keep['no_proxy'] = ','.join(dict.fromkeys(loopback + ['127.0.0.1', 'localhost']))
+    keep['PATH'] = str(HARDENED) + os.pathsep + os.environ.get('PATH', '/usr/bin:/bin')
+    return ['env', '-i', *(f'{name}={value}' for name, value in keep.items())]
+
+
 def control(profile):
     """Return the control directory for `profile`, creating it if needed."""
     directory = CONTROL / 'profiles' / profile
@@ -174,7 +194,7 @@ def start(args):
         log.touch()
         prune_logs(args.profile)
         # `exec` replaces the shell so the pane PID printed by tmux is the DSH service process itself.
-        command = ('umask 077; exec ' + shlex.join([dsh, '--profile', args.profile, '--no-open'])
+        command = ('umask 077; exec ' + shlex.join([*service_env(), dsh, '--profile', args.profile, '--no-open'])
                    + ' >> ' + shlex.quote(str(log)) + ' 2>&1')
         # Reuse an existing tmux session without disturbing other windows.
         target = ['new-window', '-t', '=' + session + ':'] if exists else ['new-session', '-s', session]
