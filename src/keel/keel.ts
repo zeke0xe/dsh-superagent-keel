@@ -45,7 +45,9 @@ export interface ActionRequest { id: string; action: string; target: string; pay
 
 /** A change was made against a delegation version that is no longer current. */
 export class VersionConflict extends Error {
-  constructor(readonly expected: number, readonly actual: number) { super(`Delegation is at version ${actual}, not ${expected}`) }
+  readonly expected: number
+  readonly actual: number
+  constructor(expected: number, actual: number) { super(`Delegation is at version ${actual}, not ${expected}`); this.expected = expected; this.actual = actual }
 }
 
 const hash = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -53,7 +55,8 @@ const json = <T>(value: string | number | null | undefined, fallback: T): T => t
 
 /** The delegation-consistency runtime: changes, work packets, commits and external actions over one `Store`. */
 export class Keel {
-  constructor(readonly store: Store = new Store()) {}
+  readonly store: Store
+  constructor(store: Store = new Store()) { this.store = store }
 
   version(): number { return Number(this.store.get('SELECT version FROM delegation WHERE id = 1')!.version) }
   scopeVersion(scope: string): number { return Number(this.store.get('SELECT version FROM scope_versions WHERE scope = ?', scope)?.version ?? 0) }

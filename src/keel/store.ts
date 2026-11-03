@@ -33,7 +33,9 @@ export type Row = Record<string, string | number | null>
 /** One SQLite file of Keel state, with immediate transactions that nest. */
 export class Store {
   readonly db: DatabaseSync
-  constructor(path = ':memory:', readonly now: () => Date = () => new Date()) {
+  readonly now: () => Date
+  constructor(path = ':memory:', now: () => Date = () => new Date()) {
+    this.now = now
     this.db = new DatabaseSync(path)
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;')
     this.db.exec(SCHEMA)
