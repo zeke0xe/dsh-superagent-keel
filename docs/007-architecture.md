@@ -332,6 +332,9 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/sessions.ts` | Sessions |
 | `src/app/gate.ts` | Submission gate for outbound messages: payload fingerprint, voiding messages queued before a person's stop, per-conversation and hourly limits, and look-up-not-resend after an attempt whose outcome is unknown |
 | `src/infra/leftovers.ts` | `reapConfined`: after a stop, kills processes still confined to a ticket's workspace, found by the sandbox's environment marker or their working directory, and reports survivors |
+| `src/app/delegation.ts` | `Delegation`: Keel inside dsh-superagent: a packet per Assignment, `orchestrator_change` from a verified person's message, interrupt-and-restart of affected tickets, and the gate check that refuses messages queued under changed premises |
+| `src/app/tools/change.ts` | `orchestrator_change`, for the main Session and workers |
+| `src/keel/store.ts`, `src/keel/keel.ts`, `src/keel/actions.ts` | Vendored Keel core (github: keel): delegation versions, grants, work packets, commits, at-most-once actions |
 | `src/app/jev.ts` | `JevShadow`: asks TypeSafe's Jev decision model about each received Trigger (intake, injection, impact) and records its calibrated answers under `jev:<triggerId>`; never decides |
 | `src/app/worker-guard.ts` | `workerRefusal`: keeps an Executor Session's file tools inside its ticket directory and refuses widening its shell sandbox (see `scripts/hardened/sandbox-exec`) |
 | `src/app/delivery.ts` | `AgentDelivery`: delivers a message to a DeepSeek Harness agent once per request id, also across a restored Session |
@@ -428,6 +431,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/delivery.spec.ts` | `AgentDelivery` |
 | `tests/retry-health.spec.ts`, `tests/role-models.spec.ts` | Model budget retries, and the models of the two roles |
 | `tests/runtime.spec.ts` | The whole application on a simulated DeepSeek Harness host, through tools and HTTP |
+| `tests/delegation.spec.ts` | Keel inside dsh-superagent: who may change the request, interrupt-and-restart, refusing messages queued under changed premises |
 | `tests/gate.spec.ts` | The submission gate alone and through the Outbox: lookups after timeouts and crashes, tampering, stops, repeated IDs and limits |
 | `tests/jev.spec.ts` | Jev configuration from `$DSH_HOME/.env`, the request and its records, once-per-Trigger and bounded requests, and curl's header and body handling |
 | `tests/worker-guard.spec.ts` | `workerRefusal`: paths in and out of the ticket directory, glob patterns, and sandbox escalation |

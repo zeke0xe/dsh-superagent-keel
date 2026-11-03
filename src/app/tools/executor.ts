@@ -10,6 +10,8 @@ import { reportRelay, threadFollowedNotice } from '../notices.ts'
 import type { Sessions } from '../sessions.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
 
+import { changeTool } from './change.ts'
+import type { Delegation } from '../delegation.ts'
 export interface ExecutorToolsHost {
   readonly engine: Pick<EngineForExecutor, 'report' | 'reply' | 'markUnrelated' | 'handback' | 'followForContext'>
   readonly store: Pick<Store, 'tickets' | 'replyStatus' | 'atomic'>
@@ -18,11 +20,14 @@ export interface ExecutorToolsHost {
   /** GitHub Source context whose pull-request rules govern claiming a reported PR. */
   readonly github: SourceContext
   sendReplies(): Promise<void>
+  /** Keel's delegation-consistency runtime, when it is running (src/app/delegation.ts). */
+  readonly delegation?: Delegation
 }
 
 export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
   const ticketId = ticket.id
   return [
+    ...host.delegation ? [changeTool(host.delegation, ticketId)] : [],
     readTool('Read one page of a resource of this ticket that the resource parameter lists. Follow next_offset, and next_resource where a page names one.',
       true, (resource, offset, limit, signal) => readResource(host.resources, resource, offset, limit, ticketId, signal)),
     tool({

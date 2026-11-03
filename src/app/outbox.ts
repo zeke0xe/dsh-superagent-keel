@@ -15,6 +15,12 @@ export interface OutboxHost {
   paused(): boolean
   /** The clock the submission gate reads; defaults to the system clock. */
   now?(): Date
+  /** Keel's view of a ticket's current work packet and of what may still go out under it (src/app/delegation.ts). */
+  readonly delegation?: {
+    packet(ticketId: string): string | undefined
+    admit(packet: string | undefined, message: OutboundMessage): { ok: boolean; reasons: string[] }
+    settled(id: string, sent: boolean): void
+  }
 }
 
 /**
@@ -31,7 +37,8 @@ export class Outbox implements OutboxPort {
     // Validate IM reply length here; acknowledgements are already validated when decided.
     if (message.kind === 'reply' && message.channel.source === 'feishu') checkedImText(message.text)
     const { store, effects } = this.host
-    store.atomic(() => { if (store.receipts.add(message)) effects.enqueue('reply', message.id, {}) })
+    const packet = message.ticketId ? this.host.delegation?.packet(message.ticketId) : undefined
+    store.atomic(() => { if (store.receipts.add({ ...message, ...packet ? { packet } : {} })) effects.enqueue('reply', message.id, {}) })
   }
   status(id: string): ReplyStatus | undefined { return this.host.store.receipts.get(id)?.status }
   withdraw(id: string): void {
@@ -52,8 +59,12 @@ export class Outbox implements OutboxPort {
     const admission = store.atomic(() => {
       const current = store.receipts.get(id)
       if (current?.status !== 'pending') return undefined
-      const decided = admit(current, { now, ticket: ticketId => store.tickets.get(ticketId),
+      let decided = admit(current, { now, ticket: ticketId => store.tickets.get(ticketId),
         attemptsSince: (since, key) => store.receipts.attemptsSince(since, key), idempotent: message => sources.idempotent(message) })
+      // A message queued under a packet whose premises the person has since changed never goes out (src/app/delegation.ts).
+      if (decided.kind === 'send' && !(current.attempts ?? 0) && this.host.delegation && !this.host.delegation.admit(current.packet, current).ok) {
+        decided = { kind: 'drop', reason: 'premiseChanged' }
+      }
       if (decided.kind === 'drop') store.receipts.settle(current, decided.reason)
       // Record the attempt before the request, so a crash or timeout after it never leads to a second post.
       if (decided.kind === 'send') store.receipts.attempt(id, now().toISOString())
@@ -65,6 +76,7 @@ export class Outbox implements OutboxPort {
     const result = await sources.send(receipt, commands)
     if (result === 'waiting') throw new Later('The Source is not installed')
     store.receipts.settle(receipt, result === 'gone' ? 'channelGone' : 'sent')
+    this.host.delegation?.settled(receipt.id, result !== 'gone')
   }
   /** Settles a message whose earlier request may have gone through, by looking for it rather than posting again. */
   private async confirm(receipt: Receipt): Promise<void> {

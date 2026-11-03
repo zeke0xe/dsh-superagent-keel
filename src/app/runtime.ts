@@ -24,6 +24,7 @@ import { DshExecutor, sourceTrigger, triggerMessage, workerSessionId } from '../
 import { ticketCard } from './cards.ts'
 import { MasterAssessor } from './assessment.ts'
 import { JevShadow, loadJevConfig } from './jev.ts'
+import { Delegation } from './delegation.ts'
 import { KV } from '../kv.ts'
 import { Store } from './store.ts'
 import { evalsHealth } from './views/overview.ts'
@@ -67,6 +68,8 @@ export class Runtime extends Service implements SourceHost {
   readonly sessions: Sessions
   readonly settings: Settings
   readonly executor: DshExecutor
+  /** Keel's delegation-consistency runtime for this state directory (src/app/delegation.ts). */
+  delegation?: Delegation
   readonly assessor: MasterAssessor
   readonly outbox: Outbox
   readonly engine: Engine
@@ -132,7 +135,8 @@ export class Runtime extends Service implements SourceHost {
       this.assessor = new MasterAssessor({ get engine() { return runtime.engine }, commands, get deployment() { return setup.deployment }, effects,
         settings: () => store.settings(), paused: () => this.paused(), threadContext: trigger => sources.threadContext(trigger),
         deliver: (id, text) => sessions.prompt(masterId, id, text, 'steer'), candidateCard: candidate => candidateCard(links, candidate) })
-      const outbox = this.outbox = new Outbox({ store, effects, sources, commands, paused: () => this.paused() })
+      const outbox = this.outbox = new Outbox({ store, effects, sources, commands, paused: () => this.paused(),
+        get delegation() { return runtime.delegation } })
       const { assessor, executor } = this
       const policy = () => settingsPolicy(store.settings(), sources)
       // Shadow judge, on when $DSH_HOME/.env names a Jev key: it records answers and never decides (src/app/jev.ts).
@@ -163,6 +167,8 @@ export class Runtime extends Service implements SourceHost {
               try { const trigger = store.triggers.get(triggerId); if (trigger) void jev.observe(trigger) } catch { /* the store closed */ }
             })
           }
+          // Each Assignment works as a Keel packet under the delegation in force when it starts.
+          if (event.type === 'assignment.started') this.delegation?.start(event.data.ticketId, event.data.assignmentId)
           // Notify the ticket's conversations whenever it ends via a pull request.
           const ended = event.type === 'ticket.ended' ? store.tickets.get(event.data.ticketId) : undefined
           if (ended && setup.configured()) {
@@ -178,7 +184,14 @@ export class Runtime extends Service implements SourceHost {
       this.sourceDeps = { store, engine, outbox, commands, sources, get ready() { return runtime.ready },
         get deployment() { return setup.deployment }, configured: () => setup.configured(),
         get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem }, receive: trigger => passes.receive(trigger) }
-      this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
+      this.delegation = new Delegation(machine.stateDir, {
+        ticket: id => store.tickets.get(id), trigger: id => store.triggers.get(id),
+        authorized: trigger => !!allowedSender(store.settings(), trigger.actor),
+        interrupt: (ticketId, reason) => this.executor.interrupt(ticketId, reason),
+        note: (ticketId, text) => { engine.note(ticketId, text); passes.request() },
+      })
+      const delegation = this.delegation
+      this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources, delegation,
         get github() { return runtime.context({ kind: 'github', health: ['github'] }) },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
@@ -263,6 +276,7 @@ export class Runtime extends Service implements SourceHost {
     } finally {
       // Close the database before releasing the directory lock so another process cannot open the database mid-write; a compromised lock may already be released.
       this.setup.restore()
+      try { this.delegation?.close() } catch { /* already closed */ }
       try { this.store.close() } finally {
         const unreleased = (error: unknown) => { this.ctx.logger.warn('dsh-superagent could not release its state directory lock: %s',
           String(error)) }

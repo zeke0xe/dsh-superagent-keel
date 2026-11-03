@@ -28,6 +28,8 @@ export interface GateState {
   fingerprint?: string
   /** When the message was queued (ISO time). */
   queuedAt?: string
+  /** The Keel work packet it was queued under (src/app/delegation.ts). */
+  packet?: string
   /** Requests started; never more than one for a Channel that cannot de-duplicate. */
   attempts?: number
   /** When the first request started (ISO time); what the limits count. */
@@ -40,7 +42,7 @@ export interface GateState {
 export type Admission =
   | { kind: 'send' }
   | { kind: 'lookup' }
-  | { kind: 'drop'; reason: 'tampered' | 'ticketStopped' | 'limitReached' }
+  | { kind: 'drop'; reason: 'tampered' | 'ticketStopped' | 'limitReached' | 'premiseChanged' }
 
 /** The fingerprint of a message's target and text. */
 export function fingerprint(message: Pick<OutboundMessage, 'channel' | 'text'>): string {

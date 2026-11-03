@@ -369,6 +369,14 @@ export class DshExecutor implements Executor {
       this.left.get(ticket.id)?.collect.abort(); this.left.delete(ticket.id); this.personal.delete(ticket.id)
     })
   }
+  /**
+   * Ends a ticket's worker turn and its background work now, keeping the ticket and its Session, so the next input starts a
+   * fresh turn (src/app/delegation.ts: a person changed what they asked for).
+   */
+  interrupt(ticketId: string, reason: string): void {
+    this.host.context.agents.get(workerSessionId(ticketId) as SessionId)?.cancel({ kind: 'user' }, { keepInbox: true })
+    this.stopWork(ticketId, reason, true)
+  }
   /** Stop what a ticket's worker runs in the background (see `stopBackground`). */
   private stopWork(ticketId: string, reason: string, keepInbox = false): void {
     const workspace = this.host.store.tickets.get(ticketId)?.execution?.directory ?? ''

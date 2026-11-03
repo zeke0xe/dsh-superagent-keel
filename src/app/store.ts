@@ -15,7 +15,7 @@ import { storeReads } from './store-read.ts'
 export interface TimelinePlace { at: string; id: string }
 /** Why a message was dropped: its conversation can never receive it (`channelGone`), or its Source no longer listens to it (`channelIgnored`). */
 /** Why a message was not sent: its conversation cannot receive it, or the submission gate refused or could not confirm it (src/app/gate.ts). */
-export type DropReason = 'channelGone' | 'channelIgnored' | 'tampered' | 'ticketStopped' | 'limitReached' | 'outcomeUnknown' | 'withdrawn'
+export type DropReason = 'channelGone' | 'channelIgnored' | 'tampered' | 'ticketStopped' | 'limitReached' | 'outcomeUnknown' | 'withdrawn' | 'premiseChanged'
 /** Outbound message receipt tracked in the outbox from the moment it is queued (`pending`, `sent`, or `dropped`); delivery attempt counts live on its `reply` effect. */
 export interface Receipt extends OutboundMessage, GateState { status: ReplyStatus; dropped?: { at: string; reason: DropReason } }
 /** A dropped outbound message receipt, with the timestamp and reason it was dropped. */
@@ -265,7 +265,7 @@ export class Store implements Repositories {
      * Records a new pending message receipt; an already-recorded message ID keeps its original receipt.
      * @returns Whether the message ID was newly recorded.
      */
-    add: (message: OutboundMessage): boolean => {
+    add: (message: OutboundMessage & Pick<GateState, 'packet'>): boolean => {
       const receipt: Receipt = { ...message, status: 'pending', fingerprint: fingerprint(message), queuedAt: new Date().toISOString() }
       return Number(this.db.prepare('INSERT OR IGNORE INTO outbox (id, value) VALUES (?, ?)').run(message.id, JSON.stringify(receipt)).changes) > 0
     },

@@ -13,6 +13,8 @@ import type { Sessions } from '../sessions.ts'
 import type { Settings } from '../settings.ts'
 import type { Store } from '../store.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
+import { changeTool } from './change.ts'
+import type { Delegation } from '../delegation.ts'
 
 const RoutingNoteSchema = z.string().trim()
   .refine(text => wordCount(text) <= NOTE_WORDS, `Routing note must not exceed ${NOTE_WORDS} words (Chinese uses word segmentation). Shorten it; do not split it across deliveries.`)
@@ -31,6 +33,8 @@ export interface MainToolsHost {
   sendReplies(): Promise<void>
   /** Runs an Engine command initiated by the main Session without emitting self-notifications. */
   quietly<T>(run: () => T): T
+  /** Keel's delegation-consistency runtime, when it is running (src/app/delegation.ts). */
+  readonly delegation?: Delegation
 }
 /** Schedules an Engine pass to execute the recorded routing decision and formats the tool response. */
 function routed(host: MainToolsHost, result: { decision?: DecisionKind; reason: string; ticketId?: string | undefined }) {
@@ -155,6 +159,7 @@ function routeTool(host: MainToolsHost): Tool {
 export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
   const resources: MainResourceHost = { ...host.resources, sessions: host.sessions, settings: host.settings }
   return [
+    ...host.delegation ? [changeTool(host.delegation)] : [],
     readTool('Read one page of a resource the resource parameter lists, such as the ticket list or a ticket. Follow next_offset, and next_resource where a page names one.',
       false, (resource, offset, limit, signal) => readResource(resources, resource, offset, limit, undefined, signal)),
     routeTool(host),

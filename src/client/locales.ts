@@ -600,6 +600,7 @@ const TEXT = {
   'reason.tampered': ['消息内容在排队后被改动，已拦下', 'The message changed after it was queued and was stopped'],
   'reason.ticketStopped': ['工单已被人停止，排队中的消息作废', 'A person stopped the ticket, so its queued message was voided'],
   'reason.limitReached': ['达到发送上限（每个对话每天 6 条或每小时共 20 条），交给人处理', 'A sending limit was reached (6 a day per conversation or 20 an hour overall); left for a person'],
+  'reason.premiseChanged': ['用户已改口，这条基于旧要求的消息没有发出', 'The person changed what they asked for; this message, built on the old request, was not sent'],
   'reason.withdrawn': ['已撤回；如果当时请求已发出，平台上可能仍有这条消息', 'Withdrawn; if its request had gone out, the platform may still show it'],
   'reason.outcomeUnknown': ['不确定是否已发出，没有自动重发，请人工确认', 'Not known whether it was sent; not sent again automatically, check by hand'],
   'reason.hostRestarted': ['dsh-superagent 重启', 'dsh-superagent restarted'],
