@@ -23,6 +23,7 @@ import type { SetupProblem } from '../setup.ts'
 import { DshExecutor, sourceTrigger, triggerMessage, workerSessionId } from '../executor/dsh.ts'
 import { ticketCard } from './cards.ts'
 import { MasterAssessor } from './assessment.ts'
+import { JevShadow, loadJevConfig } from './jev.ts'
 import { KV } from '../kv.ts'
 import { Store } from './store.ts'
 import { evalsHealth } from './views/overview.ts'
@@ -134,6 +135,10 @@ export class Runtime extends Service implements SourceHost {
       const outbox = this.outbox = new Outbox({ store, effects, sources, commands, paused: () => this.paused() })
       const { assessor, executor } = this
       const policy = () => settingsPolicy(store.settings(), sources)
+      // Shadow judge, on when $DSH_HOME/.env names a Jev key: it records answers and never decides (src/app/jev.ts).
+      const jevSettings = loadJevConfig()
+      const jev = jevSettings ? new JevShadow(jevSettings, { get: key => store.get(key), set: (key, value) => store.set(key, value) },
+        () => setup.configured() ? setup.deployment.github.login : 'the agent') : undefined
       const engine = this.engine = new Engine({ repo: store, scope: sources, policy, assessor, executor,
         outbox, prepareTicket: (ticket, outcome) => executor.prepare(ticket, outcome), emit: event => {
           // Notify the main Session only about domain events it did not initiate itself.
@@ -144,6 +149,11 @@ export class Runtime extends Service implements SourceHost {
           const followed = !this.quiet && (event.type === 'trigger.received' || event.type === 'ticket.resumed' || event.type === 'trigger.followup')
           const followup = followed ? followupNotice(store, sources, event.data.triggerId) : undefined
           if (followup) sessions.relay(followup.id, followup.text)
+          // Ask the Jev shadow judge about each new Trigger once the receiving transaction has committed.
+          if (event.type === 'trigger.received' && jev) {
+            const triggerId = event.data.triggerId
+            setImmediate(() => { const trigger = store.triggers.get(triggerId); if (trigger && !this.closing()) void jev.observe(trigger) })
+          }
           // Notify the ticket's conversations whenever it ends via a pull request.
           const ended = event.type === 'ticket.ended' ? store.tickets.get(event.data.ticketId) : undefined
           if (ended && setup.configured()) {
