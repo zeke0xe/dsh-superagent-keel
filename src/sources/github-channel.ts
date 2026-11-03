@@ -29,6 +29,9 @@ async function githubComment(host: Pick<SourceContext, 'commands'>, message: Out
   const { repository, github } = commands.deployment
   const number = Number(message.channel.address.number)
   if (!number) throw new Error('Missing GitHub reply target')
+  // The message was queued for the repository in its URL; after the deployment moves to another one it can no longer go there.
+  const queuedFor = /github\.com\/([^/]+\/[^/#?]+)/i.exec(message.channel.address.url ?? '')?.[1]
+  if (queuedFor && !sameName(queuedFor, repository)) return 'gone'
   try {
     // Retained trigger URLs also route replies queued before thread-aware delivery.
     const address = githubAddress(message.channel.address.url ?? '', repository)

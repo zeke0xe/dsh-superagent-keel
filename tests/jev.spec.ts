@@ -60,11 +60,13 @@ test('records each trigger once, bounds concurrent requests, and records failure
   const shadow = new JevShadow({ via: 'typesafe', url: 'u', key: 'k', model: 'm', timeoutMs: 1000 }, store, () => 'bot', post, 2)
   const first = shadow.observe(trigger('a', 'one'))
   const second = shadow.observe(trigger('b', 'two'))
+  // A third waits for a free slot instead of being lost.
   expect(await shadow.observe(trigger('c', 'three'))).toBeUndefined()
   release()
   expect((await first)?.intake?.choice).toBe('accept')
   await second
-  expect(sent).toEqual(['k:one', 'k:two'])
+  await new Promise(resolve => setTimeout(resolve, 10))
+  expect(sent).toEqual(['k:one', 'k:two', 'k:three'])
   expect(await shadow.observe(trigger('a', 'one'))).toBeUndefined()
   const failing = new JevShadow({ via: 'vercel', url: 'u', key: 'k', model: 'm', timeoutMs: 1000 }, store, () => 'bot',
     async () => { throw new Error('offline') })

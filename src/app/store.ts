@@ -15,7 +15,7 @@ import { storeReads } from './store-read.ts'
 export interface TimelinePlace { at: string; id: string }
 /** Why a message was dropped: its conversation can never receive it (`channelGone`), or its Source no longer listens to it (`channelIgnored`). */
 /** Why a message was not sent: its conversation cannot receive it, or the submission gate refused or could not confirm it (src/app/gate.ts). */
-export type DropReason = 'channelGone' | 'channelIgnored' | 'tampered' | 'ticketStopped' | 'limitReached' | 'outcomeUnknown'
+export type DropReason = 'channelGone' | 'channelIgnored' | 'tampered' | 'ticketStopped' | 'limitReached' | 'outcomeUnknown' | 'withdrawn'
 /** Outbound message receipt tracked in the outbox from the moment it is queued (`pending`, `sent`, or `dropped`); delivery attempt counts live on its `reply` effect. */
 export interface Receipt extends OutboundMessage, GateState { status: ReplyStatus; dropped?: { at: string; reason: DropReason } }
 /** A dropped outbound message receipt, with the timestamp and reason it was dropped. */
@@ -276,8 +276,12 @@ export class Store implements Repositories {
     settle: (message: OutboundMessage, outcome: 'sent' | DropReason): void => {
       const settled = outcome === 'sent' ? { status: 'sent' } : { status: 'dropped', dropped: { at: new Date().toISOString(), reason: outcome } }
       const { id, channel, text, kind, ticketId } = message
-      const updated = this.db.prepare("UPDATE outbox SET value = json_patch(value, ?) WHERE id = ? AND value ->> '$.status' = 'pending'")
-        .run(JSON.stringify(settled), id)
+      // A confirmed send also overrides a withdrawal made while the request was out: the platform has the message.
+      const updated = outcome === 'sent'
+        ? this.db.prepare(`UPDATE outbox SET value = json_patch(value, ?) WHERE id = ? AND (value ->> '$.status' = 'pending'
+            OR value ->> '$.dropped.reason' = 'withdrawn')`).run(JSON.stringify({ ...settled, dropped: null }), id)
+        : this.db.prepare("UPDATE outbox SET value = json_patch(value, ?) WHERE id = ? AND value ->> '$.status' = 'pending'")
+          .run(JSON.stringify(settled), id)
       if (!Number(updated.changes)) this.db.prepare('INSERT OR IGNORE INTO outbox (id, value) VALUES (?, ?)')
         .run(id, JSON.stringify({ id, channel, text, kind, ...ticketId ? { ticketId } : {}, ...settled }))
     },
@@ -298,11 +302,19 @@ export class Store implements Repositories {
     },
     /** Messages whose first request started at or after `since`, overall and in conversation `key` (see `conversation`). */
     attemptsSince: (since: string, key: string): { all: number; conversation: number } => {
-      const started = this.values<Receipt>("SELECT value FROM outbox WHERE value ->> '$.attemptAt' >= ?", since)
+      // A send the platform refused for good (`channelGone`, `channelIgnored`) reached no one and frees its place.
+      const started = this.values<Receipt>(`SELECT value FROM outbox WHERE value ->> '$.attemptAt' >= ?
+        AND IFNULL(value ->> '$.dropped.reason', '') NOT IN ('channelGone', 'channelIgnored')`, since)
       return { all: started.length, conversation: started.filter(receipt => conversation(receipt) === key).length }
     },
-    withdraw: (id: string): boolean =>
-      Number(this.db.prepare("DELETE FROM outbox WHERE id = ? AND value ->> '$.status' = 'pending'").run(id).changes) > 0,
+    // A message whose request has started may have gone out: withdrawing it keeps its record, settled as `withdrawn`, so the
+    // limits still count it and its ID stays taken; one never attempted is removed.
+    withdraw: (id: string): boolean => {
+      const removed = this.db.prepare("DELETE FROM outbox WHERE id = ? AND value ->> '$.status' = 'pending' AND value ->> '$.attempts' IS NULL").run(id)
+      if (Number(removed.changes)) return true
+      return Number(this.db.prepare(`UPDATE outbox SET value = json_patch(value, ?) WHERE id = ? AND value ->> '$.status' = 'pending'`)
+        .run(JSON.stringify({ status: 'dropped', dropped: { at: new Date().toISOString(), reason: 'withdrawn' } }), id).changes) > 0
+    },
   }
 }
 export { key, threadKey }

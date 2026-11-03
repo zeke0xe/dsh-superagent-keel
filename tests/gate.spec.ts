@@ -90,13 +90,33 @@ describe('through the Outbox', () => {
     expect([receipt('t2')?.status, receipt('t2')?.dropped?.reason, posts]).toEqual(['dropped', 'outcomeUnknown', ['t2']])
   })
 
-  it('keeps looking, and never posts, while the lookup itself fails (T2b)', async () => {
+  it('leaves a message to a person when the lookup itself keeps failing, never posting again (T2b)', async () => {
     behaviour.send = async sent => { posts.push(sent.id); throw new Error('timeout') }
     behaviour.lookup = async () => { throw new Error('API unavailable') }
     h.runtime.outbox.send(message('t2b'))
     await h.runtime.sendReplies()
-    for (let step = 0; step < 4; step++) await after(60_000)
-    expect([receipt('t2b')?.status, posts]).toEqual(['pending', ['t2b']])
+    for (let step = 0; step < LOOKUPS + 3 && receipt('t2b')?.status === 'pending'; step++) await after(120_000)
+    expect([receipt('t2b')?.dropped?.reason, posts]).toEqual(['outcomeUnknown', ['t2b']])
+  })
+
+  it('only looks up a receipt queued before the gate existed, even for a stopped ticket', async () => {
+    h.runtime.store.db.prepare('INSERT INTO outbox (id, value) VALUES (?, ?)').run('old', JSON.stringify({ ...message('old'), status: 'pending' }))
+    h.runtime.store.atomic(() => {}); found.add('old')
+    h.runtime.effects.enqueue('reply', 'old', {})
+    await h.runtime.sendReplies()
+    expect([receipt('old')?.status, posts]).toEqual(['sent', []])
+  })
+
+  it('keeps an attempted message on record when it is withdrawn, so it still counts against the limits', async () => {
+    behaviour.send = async sent => { posts.push(sent.id); throw new Error('timeout') }
+    h.runtime.outbox.send(message('w1', '9'))
+    await h.runtime.sendReplies()
+    h.runtime.outbox.withdraw('w1')
+    expect([receipt('w1')?.status, receipt('w1')?.dropped?.reason, receipt('w1')?.attempts]).toEqual(['dropped', 'withdrawn', 1])
+    expect(h.runtime.store.receipts.attemptsSince(new Date(Date.now() - 3600_000).toISOString(), 'probe:9').conversation).toBe(1)
+    h.runtime.outbox.send(message('w2', '9'))
+    h.runtime.outbox.withdraw('w2')
+    expect(receipt('w2')).toBeUndefined()
   })
 
   it('only looks up a message whose request had started when the process stopped, and keeps the count across reads (T3a, T3c)', async () => {

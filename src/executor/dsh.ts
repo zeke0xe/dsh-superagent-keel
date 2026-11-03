@@ -17,6 +17,7 @@ import type { Sessions } from '../app/sessions.ts'
 import { WorktreeNameSchema } from '../app/assessment.ts'
 import { resultRelay } from '../app/notices.ts'
 import type { HealthEntry } from '../infra/health.ts'
+import { reapConfined } from '../infra/leftovers.ts'
 import { cancelled, collectJob, killJobs, runningJobs, stopBackground, stopSubagents, until, untilQuiet } from './background.ts'
 
 const now = (): string => new Date().toISOString()
@@ -370,7 +371,17 @@ export class DshExecutor implements Executor {
   }
   /** Stop what a ticket's worker runs in the background (see `stopBackground`). */
   private stopWork(ticketId: string, reason: string, keepInbox = false): void {
-    this.track(ticketId, stopBackground(this.host.context, workerSessionId(ticketId), reason, keepInbox))
+    const workspace = this.host.store.tickets.get(ticketId)?.execution?.directory ?? ''
+    // Then any process confined to the ticket's workspace that escaped its job's process group (src/infra/leftovers.ts).
+    this.track(ticketId, stopBackground(this.host.context, workerSessionId(ticketId), reason, keepInbox).finally(() => this.reap(ticketId, workspace)))
+  }
+  /** Kills processes left confined to a ticket's workspace and records any that survived under `leftovers:<ticketId>`. */
+  private async reap(ticketId: string, workspace: string): Promise<void> {
+    const { found, remaining } = await reapConfined(workspace).catch(() => ({ found: [] as number[], remaining: [] as number[] }))
+    if (!found.length) return
+    const record = { at: new Date().toISOString(), killed: found.length - remaining.length, remaining }
+    this.host.store.set(`leftovers:${ticketId}`, record)
+    if (remaining.length) this.host.context.logger.warn('dsh-superagent: %d process(es) of ticket %s survived the stop, still confined to %s', remaining.length, ticketId, workspace)
   }
   /** A stop of a ticket's background work, which a launch or a delivery of the ticket waits for while it runs. */
   private track(ticketId: string, stop: Promise<void>): void {

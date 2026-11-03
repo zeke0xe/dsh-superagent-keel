@@ -59,8 +59,7 @@ declare module '@deepseek-ai/cordis' {
  * changes the profile, schedules work or starts goals outside the worker slots, the pause and a person's hold, starts or
  * messages other Sessions, or edits documents.
  */
-const WORK_TOOLS = ['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list', 'job_kill', 'web_search',
-  'web_fetch', 'skill', 'todo_write']
+const WORK_TOOLS = ['bash', 'pwsh', 'job_output', 'job_list', 'job_kill', 'web_search', 'web_fetch', 'skill', 'todo_write']
 /** What the main Session is told when it would wait: what it waits for comes to it, and a waiting step holds back the next. */
 const NO_WAIT = 'Reports, follow_up notices, new candidates and a background job\'s end with its output arrive by themselves as messages; '
   + 'end the turn instead of waiting for them.'
@@ -296,7 +295,7 @@ export class Sessions {
     return [agent.ctx.tools.restrict({ allow }), agent.ctx.tools.guard(execution => {
       const current = store.tickets.get(ticketId)
       if (!current || !liveTicket(current)) return 'Ticket ended; new work needs a new authorized ticket'
-      return execution ? workerRefusal(execution.name, execution.arguments, current.execution?.directory) : undefined
+      return execution ? workerRefusal(execution.name, execution.arguments) : undefined
     })]
   }
   /**

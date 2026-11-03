@@ -17,6 +17,8 @@ import type { OutboundMessage, Ticket } from '../core/index.ts'
 
 /** How many times an unconfirmed message is looked up before it settles as `outcomeUnknown`. */
 export const LOOKUPS = 3
+/** Requests at most for one message on a Channel that de-duplicates by message ID. */
+export const IDEMPOTENT_ATTEMPTS = 3
 /** Limits counted over every attempted message; reaching one drops further messages as `limitReached`. */
 export const LIMITS = { perConversationPerDay: 6, perHour: 20 }
 
@@ -66,14 +68,20 @@ export interface GateHost {
  * (`attempts`/`attemptAt` for a send, or the drop).
  */
 export function admit(receipt: OutboundMessage & GateState, host: GateHost): Admission {
-  if (receipt.fingerprint !== undefined && receipt.fingerprint !== fingerprint(receipt)) return { kind: 'drop', reason: 'tampered' }
-  const attempted = (receipt.attempts ?? 0) > 0
-  // Already attempted: never post again unless the Channel de-duplicates; the earlier request may have gone through.
-  if (attempted) return host.idempotent(receipt) ? { kind: 'send' } : { kind: 'lookup' }
+  // A receipt queued before the gate existed carries none of its fields: nothing proves it was never sent, so it is only
+  // looked up, never posted.
+  const legacy = receipt.fingerprint === undefined
+  if (!legacy && receipt.fingerprint !== fingerprint(receipt)) return { kind: 'drop', reason: 'tampered' }
   const ticket = receipt.ticketId ? host.ticket(receipt.ticketId) : undefined
-  if (ticket?.ended?.by === 'human' && receipt.queuedAt !== undefined && receipt.queuedAt <= ticket.ended.at) {
-    return { kind: 'drop', reason: 'ticketStopped' }
+  const stopped = ticket?.ended?.by === 'human' && (receipt.queuedAt === undefined || receipt.queuedAt <= ticket.ended.at)
+  const attempts = receipt.attempts ?? 0
+  if (legacy || attempts > 0) {
+    // The earlier request may have gone through: post again only on a Channel that de-duplicates, a few times at most, and
+    // never after a person's stop; otherwise look it up.
+    const resend = !legacy && host.idempotent(receipt) && attempts < IDEMPOTENT_ATTEMPTS && !stopped
+    return resend ? { kind: 'send' } : { kind: 'lookup' }
   }
+  if (stopped) return { kind: 'drop', reason: 'ticketStopped' }
   const now = host.now().getTime()
   const day = host.attemptsSince(new Date(now - 24 * 3600_000).toISOString(), conversation(receipt))
   const hour = host.attemptsSince(new Date(now - 3600_000).toISOString(), conversation(receipt))

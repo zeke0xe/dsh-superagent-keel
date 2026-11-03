@@ -9,6 +9,7 @@ import { createServer as createNet, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { confinedPids, cwdPids, reapConfined } from '../src/infra/leftovers.ts'
 
 const WRAPPER = join(import.meta.dirname, '..', 'scripts', 'hardened', 'sandbox-exec')
 const mac = process.platform === 'darwin' && existsSync('/usr/bin/sandbox-exec')
@@ -39,11 +40,11 @@ describe.skipIf(!mac)('hardened sandbox-exec', () => {
   afterAll(() => { http?.close(); unix?.close(); rmSync(home, { recursive: true, force: true }); rmSync(socket, { force: true }) })
 
   /** Runs `script` with sh under DSH's workspace-write profile through the wrapper; resolves with the exit code and output. */
-  function confined(script: string): Promise<{ code: number; out: string }> {
+  function confined(script: string, extra: Record<string, string> = {}): Promise<{ code: number; out: string }> {
     const profile = `(version 1) (allow default) (deny file-write*) (allow file-write* (literal "/dev/null")) (allow file-write* (subpath "${workspace}") (subpath "/private/tmp"))`
     return new Promise(resolve => execFile(WRAPPER, ['-p', profile, '--', '/bin/sh', '-c', script], {
       cwd: workspace, timeout: 20_000,
-      env: { PATH: '/usr/bin:/bin', HOME: home, SUPERAGENT_STATE_DIR: state, SUPERAGENT_ADMIN_PORT: String(port), NO_PROXY: '*', no_proxy: '*' },
+      env: { PATH: '/usr/bin:/bin', HOME: home, SUPERAGENT_STATE_DIR: state, SUPERAGENT_ADMIN_PORT: String(port), NO_PROXY: '*', no_proxy: '*', ...extra },
     }, (error, stdout, stderr) => resolve({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, out: stdout + stderr })))
   }
 
@@ -64,6 +65,14 @@ describe.skipIf(!mac)('hardened sandbox-exec', () => {
     expect((await confined('ln -s "$HOME/.ssh/id_ed25519" key && cat key')).code).not.toBe(0)
   })
 
+  it('keeps credentials and the state database unreadable even when SUPERAGENT_READ_ALLOW opens their directory', async () => {
+    const allow = { SUPERAGENT_READ_ALLOW: `${home}/.dsh:${home}/.ssh` }
+    expect((await confined('cat "$HOME/.dsh/.env"', allow)).code).not.toBe(0)
+    expect((await confined('cat "$HOME/.ssh/id_ed25519"', allow)).code).not.toBe(0)
+    expect((await confined(`cat "${state}/orchestrator.sqlite"`, allow)).code).not.toBe(0)
+    expect((await confined(`cat "${state}/worker-gitconfig"`, allow)).code).toBe(0)
+  })
+
   it('cannot write outside the workspace', async () => {
     expect((await confined('echo x > "$HOME/planted"')).code).not.toBe(0)
     expect((await confined(`echo x >> "${state}/worker-gitconfig"`)).code).not.toBe(0)
@@ -76,6 +85,17 @@ describe.skipIf(!mac)('hardened sandbox-exec', () => {
     expect(agent.out).not.toContain('agent')
   })
 
+  it('finds and kills a confined process that left its process group, after the command returned (T7a, T7b)', async () => {
+    // The child leaves the process group and lets go of the command's output, so the command returns while it keeps running.
+    writeFileSync(join(workspace, 'linger.py'), ['import os', 'if os.fork() == 0:', '    os.setsid()',
+      '    null = os.open("/dev/null", os.O_RDWR)', '    for fd in (0, 1, 2): os.dup2(null, fd)', '    os.execv("/bin/sleep", ["sleep", "60"])'].join('\n'))
+    const started = await confined('/usr/bin/python3 linger.py')
+    expect(started.code).toBe(0)
+    const { found, remaining } = await reapConfined(workspace)
+    expect(found.length).toBeGreaterThan(0)
+    expect(remaining).toEqual([])
+  })
+
   it('keeps a process that leaves the process group confined (T7b)', async () => {
     const script = ['import os, sys', 'if os.fork() == 0:', '    os.setsid()', '    try:',
       "        open(os.environ['HOME'] + '/.dsh/.env').read(); print('leaked')", '    except Exception as error:',
@@ -84,5 +104,22 @@ describe.skipIf(!mac)('hardened sandbox-exec', () => {
     const result = await confined('/usr/bin/python3 escape.py')
     expect(result.out).toContain('PermissionError')
     expect(result.out).not.toContain('leaked')
+  })
+})
+
+describe('leftover processes', () => {
+  it('finds processes by their workspace marker, not by a longer path that starts the same', () => {
+    const listing = ['  101 /bin/sh -c x PATH=/bin SUPERAGENT_CONFINED=/w/a HOME=/h', '  102 sleep 9 SUPERAGENT_CONFINED=/w/ab',
+      '  103 python3 x SUPERAGENT_CONFINED=/w/a', '  104 node dsh', `  ${process.pid} node SUPERAGENT_CONFINED=/w/a`].join('\n')
+    expect(confinedPids(listing, '/w/a')).toEqual([101, 103])
+  })
+  it('finds processes by their working directory', () => {
+    expect(cwdPids(['p11', 'fcwd', 'n/w/a/src', 'p12', 'fcwd', 'n/w/ab', 'p13', 'fcwd', 'n/w/a'].join('\n'), '/w/a')).toEqual([11, 13])
+  })
+  it('kills what it found and reports what survived', async () => {
+    const alive = new Set([7, 8])
+    const list = async () => [...alive]
+    expect(await reapConfined('/w/a', list, pid => { if (pid === 7) alive.delete(pid) }, 0)).toEqual({ found: [7, 8], remaining: [8] })
+    expect(await reapConfined('', list)).toEqual({ found: [], remaining: [] })
   })
 })

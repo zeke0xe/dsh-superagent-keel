@@ -69,7 +69,12 @@ export class Outbox implements OutboxPort {
   /** Settles a message whose earlier request may have gone through, by looking for it rather than posting again. */
   private async confirm(receipt: Receipt): Promise<void> {
     const { store, sources, commands } = this.host
-    const found = await sources.lookup(receipt, commands)
+    let found: Awaited<ReturnType<typeof sources.lookup>>
+    try { found = await sources.lookup(receipt, commands) } catch (error) {
+      // A lookup that keeps failing is counted like one that finds nothing, so the message reaches a person.
+      if (store.atomic(() => store.receipts.lookedUp(receipt.id)) < LOOKUPS) throw error
+      store.receipts.settle(receipt, 'outcomeUnknown'); return
+    }
     if (found === 'waiting') throw new Later('The Source is not installed')
     if (found === 'found') { store.receipts.settle(receipt, 'sent'); return }
     if (found === 'gone') { store.receipts.settle(receipt, 'channelGone'); return }

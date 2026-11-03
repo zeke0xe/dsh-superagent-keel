@@ -331,6 +331,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/skill-files.ts` | Packaged text: `promptFile`, which joins a file's one-sentence lines into paragraphs, and the bundled skills |
 | `src/app/sessions.ts` | Sessions |
 | `src/app/gate.ts` | Submission gate for outbound messages: payload fingerprint, voiding messages queued before a person's stop, per-conversation and hourly limits, and look-up-not-resend after an attempt whose outcome is unknown |
+| `src/infra/leftovers.ts` | `reapConfined`: after a stop, kills processes still confined to a ticket's workspace, found by the sandbox's environment marker or their working directory, and reports survivors |
 | `src/app/jev.ts` | `JevShadow`: asks TypeSafe's Jev decision model about each received Trigger (intake, injection, impact) and records its calibrated answers under `jev:<triggerId>`; never decides |
 | `src/app/worker-guard.ts` | `workerRefusal`: keeps an Executor Session's file tools inside its ticket directory and refuses widening its shell sandbox (see `scripts/hardened/sandbox-exec`) |
 | `src/app/delivery.ts` | `AgentDelivery`: delivers a message to a DeepSeek Harness agent once per request id, also across a restored Session |

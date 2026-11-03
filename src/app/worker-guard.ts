@@ -1,60 +1,33 @@
 /**
  * Tool-call checks for an Executor Session under the hardened sandbox (scripts/hardened/sandbox-exec).
  *
- * The bash tool runs every command inside Seatbelt, which denies reads under the operator's home except the ticket's own
- * directory. DSH's file tools (`read`, `glob`, `grep`, `write`, `edit`) run in the host process instead and the DSH file
- * sandbox does not restrict reads, so these checks keep them inside the ticket directory; a relative path that names a
- * resource, such as `github/pulls/12/thread/34`, stays allowed because it resolves inside the directory or to a resource the
- * host serves. A worker may not ask the bash tool to widen its sandbox: nobody is there to approve, and a wider mode would
- * drop the read rules.
+ * A worker reads and writes files only through the bash tool, whose every command runs inside Seatbelt. DSH's host file
+ * tools (`read`, `glob`, `grep`, `write`, `edit`) run in the host process and resolve symbolic links there, outside the
+ * sandbox, so a link in a worktree could reach the operator's credentials: workers never get them. Delegation tools a
+ * Session registers for itself escape `tools.restrict`, so they are refused here. A worker may not ask the bash tool to widen
+ * its sandbox: nobody is there to approve, and a wider mode would drop the read rules. Resources such as threads and
+ * assignments are read with `orchestrator_read`, which the host serves.
  */
-import { isAbsolute, normalize, relative, resolve } from 'node:path'
 
-/** Tools whose path arguments the guard checks, with the argument names that hold a path or a pattern. */
-const PATH_ARGS: Record<string, readonly string[]> = {
-  read: ['file_path', 'path'],
-  read_image: ['file_path', 'path'],
-  write: ['file_path', 'path'],
-  edit: ['file_path', 'path'],
-  glob: ['path', 'pattern'],
-  grep: ['path', 'glob'],
-}
-
-export const OUTSIDE = 'Path outside this ticket\'s directory; work only with files under it and the resources the host lists.'
 export const NO_ESCALATION = 'This worker\'s shell sandbox cannot be widened; do the work inside the ticket directory.'
-export const NO_DIRECTORY = 'This ticket has no working directory yet; file tools are unavailable.'
-
-/** Whether `path`, relative to `directory` when not absolute, stays within `directory`. */
-export function within(directory: string, path: string): boolean {
-  if (path.includes('\0')) return false
-  const target = isAbsolute(path) ? normalize(path) : resolve(directory, path)
-  const rel = relative(resolve(directory), target)
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
-}
+export const USE_SHELL = 'Read and write files with the bash tool, which runs inside this worker\'s sandbox; host file tools are not available to workers.'
+export const NO_DELEGATION = 'Workers do not start or message other agents; report to the orchestrator instead.'
+/** Host-side file tools: they resolve symbolic links in the host process, outside the sandbox. */
+const HOST_FILE_TOOLS = new Set(['read', 'read_image', 'write', 'edit', 'glob', 'grep'])
+/** Tools a Session registers for itself, which `tools.restrict` cannot hide. */
+const DELEGATION_TOOLS = new Set(['subagent', 'list_subagent_models', 'send_message', 'list_agents', 'interrupt_agent'])
 
 /**
  * Returns why the tool call must not run, or `undefined` to let it run.
  * @param name - the tool's name.
  * @param input - the tool call's arguments.
- * @param directory - the ticket's working directory, or `undefined` before it exists.
  */
-export function workerRefusal(name: string, input: unknown, directory: string | undefined): string | undefined {
-  const args = (input ?? {}) as Record<string, unknown>
+export function workerRefusal(name: string, input: unknown): string | undefined {
+  if (HOST_FILE_TOOLS.has(name)) return USE_SHELL
+  if (DELEGATION_TOOLS.has(name)) return NO_DELEGATION
   if (name === 'bash' || name === 'pwsh') {
-    const asked = args.sandbox_permissions
+    const asked = ((input ?? {}) as Record<string, unknown>).sandbox_permissions
     return asked !== undefined && asked !== null && asked !== '' ? NO_ESCALATION : undefined
-  }
-  const keys = PATH_ARGS[name]
-  if (!keys) return undefined
-  if (!directory) return NO_DIRECTORY
-  for (const key of keys) {
-    const value = args[key]
-    if (value === undefined || value === null || value === '') continue
-    if (typeof value !== 'string') return OUTSIDE
-    // A glob pattern is matched under `path`; refuse absolute patterns and ones that climb out of it.
-    if ((key === 'pattern' || key === 'glob') ? isAbsolute(value) || value.split(/[\\/]/).includes('..') : !within(directory, value)) {
-      return OUTSIDE
-    }
   }
   return undefined
 }

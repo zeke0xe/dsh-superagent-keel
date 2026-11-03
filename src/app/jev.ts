@@ -142,6 +142,9 @@ export const INJECTION_ALARM = 0.9
 /** Records Jev's answers for Triggers, one request at a time per Trigger, never more than `maxInFlight` at once. */
 export class JevShadow {
   private inFlight = 0
+  /** Triggers waiting for a free request slot, oldest first; beyond `QUEUE` the oldest is recorded as skipped. */
+  private readonly waiting: Trigger[] = []
+  static readonly QUEUE = 200
   constructor(private readonly config: JevConfig, private readonly store: JevStore, private readonly agent: () => string,
     private readonly post: Post = curlPost, private readonly maxInFlight = 4, private readonly now = () => new Date(),
     private readonly alarm: (trigger: Trigger, record: JevRecord) => void = () => {}) {}
@@ -152,7 +155,16 @@ export class JevShadow {
   /** Asks Jev about `trigger` unless it was asked already or too many requests are running; never throws. */
   async observe(trigger: Trigger): Promise<JevRecord | undefined> {
     const key = JevShadow.key(trigger.id)
-    if (this.store.get(key) !== undefined || this.inFlight >= this.maxInFlight) return undefined
+    try { if (this.store.get(key) !== undefined) return undefined } catch { return undefined }
+    if (this.inFlight >= this.maxInFlight) {
+      // Keep it for later rather than lose it, so the comparison report keeps its full denominator.
+      this.waiting.push(trigger)
+      if (this.waiting.length > JevShadow.QUEUE) {
+        const skipped = this.waiting.shift()!
+        try { this.store.set(JevShadow.key(skipped.id), { at: this.now().toISOString(), ms: 0, via: this.config.via, error: 'Skipped: queue full' }) } catch { /* closed */ }
+      }
+      return undefined
+    }
     this.inFlight++
     const started = this.now()
     try {
@@ -166,6 +178,10 @@ export class JevShadow {
       const record: JevRecord = { at: started.toISOString(), ms: this.now().getTime() - started.getTime(), via: this.config.via, error: String(error).slice(0, 300) }
       try { this.store.set(key, record) } catch { /* the store closed */ }
       return record
-    } finally { this.inFlight-- }
+    } finally {
+      this.inFlight--
+      const next = this.waiting.shift()
+      if (next) void this.observe(next)
+    }
   }
 }

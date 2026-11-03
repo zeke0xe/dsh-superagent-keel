@@ -24,6 +24,9 @@ import re
 import sys
 
 REAL = '/usr/bin/sandbox-exec'
+# Directories under home that hold credentials, denied after every allow rule.
+SECRET_DIRS = ('.ssh', '.gnupg', '.config/gh', '.config/gh-agent', 'Library/Keychains', '.aws', '.codex', '.claude',
+               '.claude-official', '.lark-cli-dsh-superagent', '.docker')
 
 
 def sbpl(path: str) -> str:
@@ -52,6 +55,9 @@ def extra_rules(profile: str, env: dict) -> str:
         '(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name "com.apple.securityd.xpc")'
         ' (global-name "com.apple.security.agent") (global-name "com.apple.secd"))',
         f'(deny network-outbound (remote ip "localhost:{port}"))',
+        # Credentials and the state database stay unreadable whatever SUPERAGENT_READ_ALLOW or the workspace grant.
+        '(deny file-read* ' + ' '.join(f'(subpath {sbpl(os.path.join(home, p))})' for p in SECRET_DIRS)
+        + f' (literal {sbpl(os.path.join(home, ".dsh/.env"))}) (regex #"^{re.escape(os.path.join(state, "orchestrator.sqlite"))}"))',
         '(deny network-outbound (remote unix-socket))',
     ]
     return ' '.join(rules)
@@ -61,6 +67,10 @@ def main(argv: list) -> None:
     args = argv[1:]
     if len(args) >= 2 and args[0] == '-p':
         args = ['-p', args[1] + ' ' + extra_rules(args[1], dict(os.environ))] + args[2:]
+        # Mark the command and its descendants with the workspace, so a stop can find processes that left their group
+        # (src/infra/leftovers.ts). The first writable root DSH granted is the workspace.
+        roots = re.findall(r'\(allow file-write\* \(subpath "((?:[^"\\]|\\.)*)"\)', args[1])
+        os.environ['SUPERAGENT_CONFINED'] = roots[0] if roots else 'read-only'
         log = os.environ.get('SUPERAGENT_SANDBOX_LOG')
         if log:
             # One line per confined command: when, the hardened rule count, and the program, never its arguments.

@@ -158,7 +158,10 @@ export class Runtime extends Service implements SourceHost {
           // Ask the Jev shadow judge about each new Trigger once the receiving transaction has committed.
           if (event.type === 'trigger.received' && jev) {
             const triggerId = event.data.triggerId
-            setImmediate(() => { const trigger = store.triggers.get(triggerId); if (trigger && !this.closing()) void jev.observe(trigger) })
+            setImmediate(() => {
+              if (this.closing()) return
+              try { const trigger = store.triggers.get(triggerId); if (trigger) void jev.observe(trigger) } catch { /* the store closed */ }
+            })
           }
           // Notify the ticket's conversations whenever it ends via a pull request.
           const ended = event.type === 'ticket.ended' ? store.tickets.get(event.data.ticketId) : undefined
