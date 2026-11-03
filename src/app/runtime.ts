@@ -137,8 +137,14 @@ export class Runtime extends Service implements SourceHost {
       const policy = () => settingsPolicy(store.settings(), sources)
       // Shadow judge, on when $DSH_HOME/.env names a Jev key: it records answers and never decides (src/app/jev.ts).
       const jevSettings = loadJevConfig()
+      // A message Jev rates as a likely injection turns the `jev` health entry to an error, which the panel lists as a problem.
+      const jevHealth = board.claim('jev', { state: 'ready', detail: jevSettings ? `Shadow judge on (${jevSettings.via})` : 'Shadow judge off' })
       const jev = jevSettings ? new JevShadow(jevSettings, { get: key => store.get(key), set: (key, value) => store.set(key, value) },
-        () => setup.configured() ? setup.deployment.github.login : 'the agent') : undefined
+        () => setup.configured() ? setup.deployment.github.login : 'the agent', undefined, undefined, undefined,
+        (trigger, record) => { jevHealth.set({ state: 'error', at: record.at, detail: `Possible prompt injection (${Math.round((record.injection ?? 0) * 100)}%) `
+          + `from ${trigger.actor.id} in ${trigger.threads[0] ? `${trigger.threads[0].source}#${trigger.threads[0].id}` : trigger.source}: `
+          + `"${trigger.text.replace(/\s+/g, ' ').slice(0, 120)}". Jev only reports: check what the agent did with it. Clears after 24 hours without another.` })
+          setTimeout(() => { if (jevHealth.get()?.at === record.at) jevHealth.set({ state: 'ready', detail: `Shadow judge on (${jevSettings.via})` }) }, 24 * 3600_000).unref() }) : undefined
       const engine = this.engine = new Engine({ repo: store, scope: sources, policy, assessor, executor,
         outbox, prepareTicket: (ticket, outcome) => executor.prepare(ticket, outcome), emit: event => {
           // Notify the main Session only about domain events it did not initiate itself.

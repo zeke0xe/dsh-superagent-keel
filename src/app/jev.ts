@@ -136,11 +136,15 @@ export const curlPost: Post = (url, key, body, timeoutMs) => new Promise(resolve
 
 export interface JevStore { set(key: string, value: unknown): void; get(key: string): unknown }
 
+/** Injection probability at or above which a Trigger is reported to a person. */
+export const INJECTION_ALARM = 0.9
+
 /** Records Jev's answers for Triggers, one request at a time per Trigger, never more than `maxInFlight` at once. */
 export class JevShadow {
   private inFlight = 0
   constructor(private readonly config: JevConfig, private readonly store: JevStore, private readonly agent: () => string,
-    private readonly post: Post = curlPost, private readonly maxInFlight = 4, private readonly now = () => new Date()) {}
+    private readonly post: Post = curlPost, private readonly maxInFlight = 4, private readonly now = () => new Date(),
+    private readonly alarm: (trigger: Trigger, record: JevRecord) => void = () => {}) {}
 
   /** Key of a Trigger's record. */
   static key(triggerId: string): string { return `jev:${triggerId}` }
@@ -156,6 +160,7 @@ export class JevShadow {
       const { status, body: answer } = await this.post(this.config.url, this.config.key, body, this.config.timeoutMs)
       const record = jevRecord(status, answer, started.toISOString(), this.now().getTime() - started.getTime(), this.config.via)
       this.store.set(key, record)
+      if ((record.injection ?? 0) >= INJECTION_ALARM) { try { this.alarm(trigger, record) } catch { /* reporting must not fail the record */ } }
       return record
     } catch (error) {
       const record: JevRecord = { at: started.toISOString(), ms: this.now().getTime() - started.getTime(), via: this.config.via, error: String(error).slice(0, 300) }
