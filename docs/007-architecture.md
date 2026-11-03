@@ -330,6 +330,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/context.ts` | The built-in prompt text, read from `prompts/`, and the transcript entries Sessions read |
 | `src/app/skill-files.ts` | Packaged text: `promptFile`, which joins a file's one-sentence lines into paragraphs, and the bundled skills |
 | `src/app/sessions.ts` | Sessions |
+| `src/app/gate.ts` | Submission gate for outbound messages: payload fingerprint, voiding messages queued before a person's stop, per-conversation and hourly limits, and look-up-not-resend after an attempt whose outcome is unknown |
 | `src/app/jev.ts` | `JevShadow`: asks TypeSafe's Jev decision model about each received Trigger (intake, injection, impact) and records its calibrated answers under `jev:<triggerId>`; never decides |
 | `src/app/worker-guard.ts` | `workerRefusal`: keeps an Executor Session's file tools inside its ticket directory and refuses widening its shell sandbox (see `scripts/hardened/sandbox-exec`) |
 | `src/app/delivery.ts` | `AgentDelivery`: delivers a message to a DeepSeek Harness agent once per request id, also across a restored Session |
@@ -426,6 +427,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/delivery.spec.ts` | `AgentDelivery` |
 | `tests/retry-health.spec.ts`, `tests/role-models.spec.ts` | Model budget retries, and the models of the two roles |
 | `tests/runtime.spec.ts` | The whole application on a simulated DeepSeek Harness host, through tools and HTTP |
+| `tests/gate.spec.ts` | The submission gate alone and through the Outbox: lookups after timeouts and crashes, tampering, stops, repeated IDs and limits |
 | `tests/jev.spec.ts` | Jev configuration from `$DSH_HOME/.env`, the request and its records, once-per-Trigger and bounded requests, and curl's header and body handling |
 | `tests/worker-guard.spec.ts` | `workerRefusal`: paths in and out of the ticket directory, glob patterns, and sandbox escalation |
 | `tests/tools.spec.ts` | The Sessions' tools: what `orchestrator_read` reads for each role, and the shapes and checks of the other main Session tools |

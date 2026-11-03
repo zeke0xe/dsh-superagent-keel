@@ -16,6 +16,15 @@ const gone = (error: unknown): boolean => error instanceof CliError
 const missing = (error: unknown): boolean => error instanceof CliError && (error.code === 404 || error.code === 410)
 /** Posts a comment or review-thread reply with an embedded HTML marker so retries do not create duplicate comments. */
 export async function sendGithub(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'> {
+  const result = await githubComment(host, message, true)
+  return result === 'gone' ? 'gone' : 'sent'
+}
+/** Looks for the marker of an earlier send of `message` without posting (src/app/gate.ts). */
+export async function lookupGithub(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'found' | 'absent' | 'gone'> {
+  const result = await githubComment(host, message, false)
+  return result === 'sent' ? 'found' : result
+}
+async function githubComment(host: Pick<SourceContext, 'commands'>, message: OutboundMessage, post: boolean): Promise<'found' | 'absent' | 'sent' | 'gone'> {
   const { commands } = host
   const { repository, github } = commands.deployment
   const number = Number(message.channel.address.number)
@@ -34,7 +43,8 @@ export async function sendGithub(host: Pick<SourceContext, 'commands'>, message:
     const marker = `<!-- dsh-superagent:${message.id} -->`
     const mine = (comment: z.infer<typeof CommentSchema>) => sameName(comment.user?.login ?? '', github.login)
       && (rootId === undefined || comment.in_reply_to_id === rootId) && (comment.body ?? '').includes(marker)
-    if ((await commands.pages(CommentSchema, path)).some(mine)) return 'sent'
+    if ((await commands.pages(CommentSchema, path)).some(mine)) return 'found'
+    if (!post) return 'absent'
     const target = rootId === undefined ? path : `${path}/${rootId}/replies`
     await commands.api(z.unknown(), target, '--method', 'POST', '-f', `body=${message.text}\n\n${marker}`)
     return 'sent'

@@ -51,6 +51,13 @@ export interface SourceChannel<C> {
    * @throws when delivery failed but may succeed on a later retry.
    */
   send(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'>
+  /** The platform de-duplicates repeated sends of one message ID, so a send whose outcome is unknown may be repeated. */
+  idempotent?: boolean
+  /**
+   * Looks for an earlier send of `message` without sending; without it, and without `idempotent`, a send whose outcome is
+   * unknown is never confirmed and settles for a person (src/app/gate.ts).
+   */
+  lookup?(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'found' | 'absent' | 'gone'>
   /** Returns the URL and label for `address`; `url` is empty when `links` lack the required deployment info. */
   link(address: Record<string, string>, links: ChannelLinks): ChannelLink
 }

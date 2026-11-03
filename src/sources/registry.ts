@@ -97,6 +97,14 @@ export class SourceRegistry implements SourceScope {
     if (!kind) return 'waiting'
     return kind.channel ? kind.channel.send({ commands }, message) : 'gone'
   }
+  /** Whether the Channel of `message` de-duplicates repeated sends of one message ID. */
+  idempotent(message: OutboundMessage): boolean { return !!this.kinds.get(message.channel.source)?.channel?.idempotent }
+  /** Looks for an earlier send of `message`; `'unsupported'` when its Channel cannot look, `'waiting'` without its kind. */
+  async lookup(message: OutboundMessage, commands: Commands): Promise<'found' | 'absent' | 'gone' | 'unsupported' | 'waiting'> {
+    const kind = this.kinds.get(message.channel.source)
+    if (!kind) return 'waiting'
+    return kind.channel?.lookup ? kind.channel.lookup({ commands }, message) : 'unsupported'
+  }
   link(channel: ChannelRef, links: ChannelLinks): ChannelLink {
     const link = this.kinds.get(channel.source)?.channel?.link(channel.address, links)
     return link ?? { url: '', label: { zh: channel.source, en: channel.source } }
